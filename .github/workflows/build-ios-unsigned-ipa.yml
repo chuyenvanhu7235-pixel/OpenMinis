@@ -1,0 +1,88 @@
+name: Build Unsigned IPA
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-unsigned-ipa
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup build config
+        run: |
+          cp src/ios/Configs/ProviderCustomization.xcconfig.example \
+             src/ios/Configs/ProviderCustomization.xcconfig
+
+      - name: Install build tools
+        run: |
+          brew install ninja llvm lld libarchive pkg-config meson
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-L$(brew --prefix libarchive)/lib" >> "$GITHUB_ENV"
+          echo "CPPFLAGS=-I$(brew --prefix libarchive)/include" >> "$GITHUB_ENV"
+
+      - name: Cache native dependencies
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps/lame-build
+            deps/frameworks
+            deps/libs
+            deps/include
+            deps/resources/alpine-rootfs.zip
+          key: openminis-native-deps-v1-${{ hashFiles('deps/build_*.sh', 'deps/prepare_alpine_rootfs.sh') }}
+
+      - name: Build native dependencies
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: |
+          chmod +x deps/build_lame.sh deps/build_ffmpeg.sh deps/build_ish.sh deps/prepare_alpine_rootfs.sh
+          ./deps/build_lame.sh
+          ./deps/build_ffmpeg.sh
+          ./deps/build_ish.sh
+          ./deps/prepare_alpine_rootfs.sh
+
+      - name: Build app without signing
+        run: |
+          xcodebuild build \
+            -project src/ios/Minis.xcodeproj \
+            -scheme Minis \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM=""
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH=$(find "$RUNNER_TEMP/DerivedData" -name "Minis.app" -type d | head -1)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::Minis.app not found"
+            find "$RUNNER_TEMP/DerivedData" -name "*.app" || true
+            exit 1
+          fi
+          echo "Found app: $APP_PATH"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          zip -qr OpenMinis-unsigned.ipa Payload
+          ls -lh OpenMinis-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenMinis-unsigned-ipa
+          path: ${{ runner.temp }}/OpenMinis-unsigned.ipa
+          retention-days: 14
