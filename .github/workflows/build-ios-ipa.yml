@@ -36,9 +36,11 @@ jobs:
 
       - name: Install build tools
         run: |
-          brew install ninja llvm libarchive pkg-config meson
+          brew install ninja llvm lld libarchive pkg-config meson
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "PKG_CONFIG_PATH=$(brew --prefix libarchive)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-L$(brew --prefix libarchive)/lib" >> "$GITHUB_ENV"
+          echo "CPPFLAGS=-I$(brew --prefix libarchive)/include" >> "$GITHUB_ENV"
 
       - name: Cache native dependencies
         id: deps-cache
