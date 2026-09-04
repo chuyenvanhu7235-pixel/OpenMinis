@@ -31,35 +31,53 @@ jobs:
           echo "LDFLAGS=-L$(brew --prefix libarchive)/lib" >> "$GITHUB_ENV"
           echo "CPPFLAGS=-I$(brew --prefix libarchive)/include" >> "$GITHUB_ENV"
 
-      - name: Cache native dependencies
+      - name: Restore native dependency cache
         id: deps-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             deps/lame-build
             deps/frameworks
             deps/libs
             deps/include
-            deps/resources/alpine-rootfs.zip
-          key: openminis-native-deps-v1-${{ hashFiles('deps/build_*.sh', 'deps/prepare_alpine_rootfs.sh') }}
+            deps/resources
+          key: openminis-native-deps-v2-${{ hashFiles('deps/build_*.sh', 'deps/prepare_alpine_rootfs.sh') }}
+          restore-keys: |
+            openminis-native-deps-v2-
 
       - name: Build native dependencies
         if: steps.deps-cache.outputs.cache-hit != 'true'
         run: |
           chmod +x deps/build_lame.sh deps/build_ffmpeg.sh deps/build_ish.sh deps/prepare_alpine_rootfs.sh
           ./deps/build_lame.sh
-          ./deps/build_ffmpeg.sh
-          ./deps/build_ish.sh
-          ./deps/prepare_alpine_rootfs.sh
+          ./deps/build_ffmpeg.sh &
+          ./deps/build_ish.sh &
+          ./deps/prepare_alpine_rootfs.sh &
+          wait
+
+      - name: Save native dependency cache
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            deps/lame-build
+            deps/frameworks
+            deps/libs
+            deps/include
+            deps/resources
+          key: openminis-native-deps-v2-${{ hashFiles('deps/build_*.sh', 'deps/prepare_alpine_rootfs.sh') }}
 
       - name: Build app without signing
         run: |
+          JOBS=$(sysctl -n hw.ncpu)
           xcodebuild build \
             -project src/ios/Minis.xcodeproj \
             -scheme Minis \
             -configuration Release \
             -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            -jobs "$JOBS" \
+            -parallelizeTargets \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
