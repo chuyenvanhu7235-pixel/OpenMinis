@@ -1,0 +1,55 @@
+name: Build Unsigned IPA Guardian
+
+on:
+  workflow_run:
+    workflows: ["Build Unsigned IPA"]
+    types: [completed]
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  recover:
+    if: >-
+      github.event.workflow_run.conclusion != 'success' &&
+      github.event.workflow_run.event != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check retry budget
+        id: budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          MAX_RETRIES=20
+          FAILS=$(gh run list --repo "$REPO" \
+            --workflow=build-ios-unsigned-ipa.yml \
+            --limit 25 \
+            --json conclusion,status \
+            --jq '[.[] | select(.status == "completed") | .conclusion] | .[0:10] | map(select(. != "success")) | length')
+          echo "Recent non-success runs in last 10 completed: $FAILS"
+          if [ "$FAILS" -ge "$MAX_RETRIES" ]; then
+            echo "should_retry=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Retry budget exhausted ($FAILS/$MAX_RETRIES). Manual intervention needed."
+          else
+            echo "should_retry=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait before retry
+        if: steps.budget.outputs.should_retry == 'true'
+        run: sleep 30
+
+      - name: Re-trigger unsigned IPA build
+        if: steps.budget.outputs.should_retry == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          REPO="${{ github.repository }}"
+          PREV="${{ github.event.workflow_run.conclusion }}"
+          echo "Previous run ended with: $PREV — auto-resuming build..."
+          gh workflow run build-ios-unsigned-ipa.yml \
+            --repo "$REPO" \
+            --ref "${{ github.event.workflow_run.head_branch }}" \
+            -f auto_recover=true \
+            -f recover_reason="$PREV"
