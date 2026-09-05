@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 180
 
     steps:
@@ -29,6 +29,12 @@ jobs:
         if: inputs.auto_recover == true
         run: |
           echo "Auto-recover build. Previous stop reason: ${{ inputs.recover_reason }}"
+
+      - name: Select Xcode 26
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.2.app
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
 
       - name: Checkout
         uses: actions/checkout@v4
