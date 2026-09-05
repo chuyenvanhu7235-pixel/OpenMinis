@@ -7417,7 +7417,6 @@ private struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var deepLink = DeepLinkCoordinator.shared
     @State private var navPath = NavigationPath()
-    @State private var showFeedbackDialog = false
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -7674,43 +7673,6 @@ private struct SettingsSheet: View {
                                 .background(.indigo, in: Circle())
                         }
                     }
-                    Link(destination: URL(string: "https://openminis.github.io/privacy-policy.html")!) {
-                        Label {
-                            Text("Privacy Policy")
-                        } icon: {
-                            Image(systemName: "hand.raised")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.white)
-                                .frame(width: 21, height: 21)
-                                .background(.teal, in: Circle())
-                        }
-                    }
-                    Button {
-                        showFeedbackDialog = true
-                    } label: {
-                        Label {
-                            Text("Feedback")
-                        } icon: {
-                            Image(systemName: "bubble.left.and.bubble.right.fill")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.white)
-                                .frame(width: 21, height: 21)
-                                .background(.indigo, in: Circle())
-                        }
-                    }
-                    .foregroundStyle(.primary)
-                    .confirmationDialog("Feedback", isPresented: $showFeedbackDialog, titleVisibility: .visible) {
-                        Button("Report a Bug (GitHub)") {
-                            if let url = Self.makeBugReportURL() { UIApplication.shared.open(url) }
-                        }
-                        Button("Feedback (Telegram)") {
-                            if let url = URL(string: "https://t.me/+2NzhOJuzRyI1YmM1") { UIApplication.shared.open(url) }
-                        }
-                        Button("Feedback (Email)") {
-                            if let url = Self.makeFeedbackEmailURL() { UIApplication.shared.open(url) }
-                        }
-                        Button("Cancel", role: .cancel) {}
-                    }
                 }
 
             }
@@ -7866,108 +7828,6 @@ private struct SettingsSheet: View {
             navPath.append(SettingsDestination.mcpServerDetail(serverId: id))
         }
         deepLink.pendingSettingsTarget = nil
-    }
-
-    /// Compose the feedback mailto URL with a prefilled body that includes
-    /// app version, iOS version, and a machine identifier, plus a prompt
-    /// asking the user to attach a screenshot manually (mailto:// can't
-    /// auto-attach). Using URLComponents so the subject and body go through
-    /// proper URL encoding without hand-rolling addingPercentEncoding calls.
-    fileprivate static func makeFeedbackEmailURL() -> URL? {
-        let bundle = Bundle.main
-        let appVersion = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        let iosVersion = UIDevice.current.systemVersion
-        let device = machineIdentifier()
-
-        let body = """
-        Please describe your feedback:
-
-
-        ---
-        App Version: \(appVersion) (\(build))
-        iOS Version: \(iosVersion)
-        Device: \(device)
-
-        Screenshot (optional): Please attach a screenshot if relevant.
-        """
-
-        var components = URLComponents()
-        components.scheme = "mailto"
-        components.path = "dev@openminis.app"
-        components.queryItems = [
-            URLQueryItem(name: "subject", value: "Minis Feedback"),
-            URLQueryItem(name: "body", value: body),
-        ]
-        return components.url
-    }
-
-    /// Build the GitHub Issue URL with a bilingual bug-report template
-    /// pre-filled with platform / OS / app / device info. SwiftUI `Link`
-    /// hands the URL to UIApplication.shared.open, which routes to Safari.
-    fileprivate static func makeBugReportURL() -> URL? {
-        let bundle = Bundle.main
-        let appVersion = bundle.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
-        let build = bundle.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-        let iosVersion = UIDevice.current.systemVersion
-        let device = machineIdentifier()
-
-        let body = """
-        ## 📝 Problem Summary
-
-        <!-- Briefly describe the issue you encountered -->
-
-
-        ## 📱 Basic Information
-
-        | Field | Value |
-        |-------|-------|
-        | Platform | iOS |
-        | OS Version | iOS \(iosVersion) |
-        | Minis Version | \(appVersion) (build \(build)) |
-        | Device Model | \(device) |
-
-        ## 🔁 Steps to Reproduce
-
-        1.
-        2.
-        3.
-
-        ## ❌ Error Details
-
-        ```
-        paste error here
-        ```
-
-        ## ✅ Expected Behavior
-
-
-
-        ## 🗂️ Additional Information
-
-        """
-
-        var components = URLComponents(string: "https://github.com/OpenMinis/OpenMinis/issues/new")
-        components?.queryItems = [
-            URLQueryItem(name: "template", value: "bug_report.md"),
-            URLQueryItem(name: "title", value: "[Bug] "),
-            URLQueryItem(name: "body", value: body),
-        ]
-        return components?.url
-    }
-
-    /// Returns the hardware model identifier, e.g. "iPhone16,2".
-    /// `UIDevice.current.model` returns the generic "iPhone" / "iPad" and
-    /// isn't useful in a bug report, so we fall back to utsname.
-    private static func machineIdentifier() -> String {
-        var sys = utsname()
-        uname(&sys)
-        let id = withUnsafePointer(to: &sys.machine) {
-            $0.withMemoryRebound(to: CChar.self, capacity: Int(_SYS_NAMELEN)) {
-                String(cString: $0)
-            }
-        }
-        return id.isEmpty ? UIDevice.current.model : id
     }
 }
 

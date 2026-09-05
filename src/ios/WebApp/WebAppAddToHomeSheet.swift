@@ -8,16 +8,9 @@ private let sheetLogger = AppLogger(category: "WebAppAddSheet")
 ///
 /// Flow:
 ///   1. Classify the host URL into `(scope, scopeContext, htmlPath)` and
-///      persist a `WebAppShortcut` row so deep-link return can re-resolve
-///      the file by id (or by session+path).
-///   2. Build an `https://openminis.app/launch.html?…` URL whose query
-///      encodes the scope-prefixed path + session + a category-driven
-///      icon key, with the title in the fragment.
-///   3. `UIApplication.shared.open(url)` hands the user off to Safari so
-///      they can use Share → Add to Home Screen. The pinned tile loads
-///      the launcher; when launched in standalone mode it deep-links back
-///      to `minis://open?session=…&path=…`, which `DeepLinkRouter` routes
-///      into the immersive WebView.
+///      persist a `WebAppShortcut` row.
+///   2. Open the WebApp in-app via `minis://open?…` — no external server,
+///      no Safari, no icon fetch from openminis.app.
 struct WebAppAddToHomeSheet: View {
     let htmlURL: URL
     let sourceSessionId: String?
@@ -62,14 +55,14 @@ struct WebAppAddToHomeSheet: View {
                     }
                     Section {
                         Button {
-                            saveAndOpenLauncher()
+                            saveAndOpenWebApp()
                         } label: {
                             HStack {
                                 Spacer()
                                 if opening {
                                     ProgressView().tint(.white)
                                 } else {
-                                    Text("Continue in Safari")
+                                    Text("Open Web App")
                                         .fontWeight(.semibold)
                                 }
                                 Spacer()
@@ -79,7 +72,7 @@ struct WebAppAddToHomeSheet: View {
                         .listRowBackground(Color.accentColor)
                         .foregroundStyle(.white)
                     } footer: {
-                        Text("Safari will open the launcher page. Tap the Share button → Add to Home Screen to pin the icon.")
+                        Text("Opens this page inside Minis. Icons are rendered on-device; no data is sent to openminis.app.")
                     }
                 }
             }
@@ -196,7 +189,7 @@ struct WebAppAddToHomeSheet: View {
     }
 
     @MainActor
-    private func saveAndOpenLauncher() {
+    private func saveAndOpenWebApp() {
         guard let cls = classification else { return }
         opening = true
         errorMessage = nil
@@ -204,11 +197,6 @@ struct WebAppAddToHomeSheet: View {
         let id = UUID().uuidString
         let trimmedTitle = titleInput.trimmingCharacters(in: .whitespaces)
 
-        // Persist a row so DeepLinkRouter (case "open") can re-resolve by
-        // (session, scoped-path) — and so a future in-app "My WebApps"
-        // listing has something to show. iconRef records the category for
-        // diagnostics; the home-screen tile's actual icon comes from the
-        // launcher page's <link rel="apple-touch-icon">.
         let shortcut = WebAppShortcut(
             id: id,
             htmlPath: cls.htmlPath,
@@ -221,10 +209,8 @@ struct WebAppAddToHomeSheet: View {
             sourceSessionId: sourceSessionId
         )
 
-        guard let url = buildLauncherURL(classification: cls,
-                                         title: trimmedTitle,
-                                         category: category) else {
-            errorMessage = AppLocalized("Couldn't build the launcher URL.")
+        guard let url = buildMinisOpenURL(classification: cls, title: trimmedTitle) else {
+            errorMessage = AppLocalized("Couldn't build the WebApp link.")
             opening = false
             return
         }
@@ -232,35 +218,29 @@ struct WebAppAddToHomeSheet: View {
         Task { @MainActor in
             await ChatStore.shared.saveWebAppShortcut(shortcut)
             sheetLogger.info("saved shortcut id=\(id.prefix(8)) title=\(trimmedTitle) scope=\(cls.scope.rawValue) → opening \(url.absoluteString)")
-            UIApplication.shared.open(url, options: [:]) { ok in
-                sheetLogger.info("UIApplication.open completed ok=\(ok)")
-                opening = false
-                dismiss()
-            }
+            DeepLinkRouter.handle(url: url, shareCoordinator: ShareCoordinator.shared)
+            opening = false
+            dismiss()
         }
     }
 
     // MARK: - URL builder
 
-    /// Builds the launcher URL from the classification. `path` is
-    /// scope-prefixed so the launcher (and the round-trip deep link) can
-    /// recover the scope without out-of-band parameters:
+    /// Builds an in-app `minis://open?…` deep link. No external network.
+    /// scope-prefixed so the deep link can recover the scope without
+    /// out-of-band parameters:
     ///
     ///   session-attachment  →  path=attachments/<htmlPath>, session=<sid>
     ///   session-workspace   →  path=workspace/<htmlPath>,   session=<sid>
     ///   shared              →  path=shared:<htmlPath>       (no session)
     ///   mount               →  path=mount:<uuid>/<htmlPath> (no session)
-    private func buildLauncherURL(classification: WebAppPathClassifier.Classified,
-                                  title: String,
-                                  category: LauncherCategory) -> URL? {
+    private func buildMinisOpenURL(classification: WebAppPathClassifier.Classified,
+                                   title: String) -> URL? {
         var components = URLComponents()
-        components.scheme = "https"
-        components.host = "openminis.app"
-        components.path = "/launch.html"
+        components.scheme = "minis"
+        components.host = "open"
 
-        var items: [URLQueryItem] = [
-            URLQueryItem(name: "icon", value: category.rawValue),
-        ]
+        var items: [URLQueryItem] = []
 
         switch classification.scope {
         case .sessionAttachment:
@@ -279,9 +259,6 @@ struct WebAppAddToHomeSheet: View {
         }
         components.queryItems = items
 
-        // Title goes in fragment so it never reaches the server but is
-        // available to the launcher's JS for window.title / suggested
-        // home-screen name.
         guard var s = components.url?.absoluteString else { return nil }
         if let encoded = title.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed) {
             s += "#" + encoded
@@ -292,11 +269,8 @@ struct WebAppAddToHomeSheet: View {
 
 // MARK: - Launcher category
 
-/// The 16 home-screen-tile categories. Each one maps 1:1 to:
-///   - a PNG at openminis.app/icons/category/<rawValue>.png
-///   - the `(systemName, color)` pair shown in the iOS Category UI
-///     (ContentView's session-category picker) so the sheet and the
-///     home-screen tile feel like the same visual language.
+/// The 16 WebApp tile categories. Each maps to an on-device SF Symbol + color
+/// (same visual language as the session-category picker in ContentView).
 enum LauncherCategory: String, CaseIterable, Hashable {
     case code, writing, research, analysis, creative, chat
     case math, translation, health, finance, travel, education
@@ -369,9 +343,7 @@ enum LauncherCategory: String, CaseIterable, Hashable {
 
 // MARK: - Tile preview
 
-/// SwiftUI re-creation of the launcher's PNG icon. Layout mirrors the
-/// generator used to ship /icons/category/<name>.png so the preview
-/// shown in the sheet matches what iOS will paint on the home screen.
+/// SwiftUI preview of the WebApp tile icon — rendered entirely on-device.
 private struct LauncherTilePreview: View {
     let category: LauncherCategory
     let title: String
@@ -382,9 +354,7 @@ private struct LauncherTilePreview: View {
     var body: some View {
         VStack(spacing: 8) {
             ZStack {
-                // Aurora-ish background — a lightweight on-device
-                // approximation; the actual home-screen tile uses the
-                // exact PNG from openminis.app.
+                // Aurora-ish background — on-device gradient only.
                 RoundedRectangle(cornerRadius: 22, style: .continuous)
                     .fill(
                         LinearGradient(
